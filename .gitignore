@@ -1,0 +1,39 @@
+# Dependencies
+node_modules/
+
+# Local environment and secrets (keep shareable examples)
+.env
+.env.*
+!.env.example
+!.env.*.example
+.aws/
+*.pem
+*.key
+
+# Generated output and test artifacts
+dist/
+build/
+coverage/
+.nyc_output/
+*.tsbuildinfo
+
+# Runtime logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Local AWS tooling output
+.aws-sam/
+.serverless/
+
+# Operating system and editor files
+.DS_Store
+._*
+Thumbs.db
+.idea/
+*.swp
+*.swo
+*~
