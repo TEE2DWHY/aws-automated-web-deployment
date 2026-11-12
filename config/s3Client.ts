@@ -8,7 +8,7 @@ type S3Value ={
 }
 
 const config: S3ClientConfig  = {
-    region: "eu-west-2",
+    region: process.env.AWS_REGION ?? "eu-west-2",
 }
 const client = new S3Client(config)
 

@@ -1,0 +1,285 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  Single-instance TypeScript application environment with a dedicated public
+  subnet, private S3 storage, an EC2 role, and automatic application startup.
+
+Parameters:
+  InstanceType:
+    Type: String
+    Default: t3.micro
+    AllowedValues: [t3.micro, t3.small, t3.medium]
+    Description: x86 EC2 instance size. AWS charges apply.
+  LatestAmiId:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64
+    Description: Amazon Linux 2023 x86_64 AMI resolved in the stack region.
+  AllowedClientCidr:
+    Type: String
+    Description: Your public IPv4 address with /32, or a trusted IPv4 CIDR, permitted to access the app.
+    AllowedPattern: '(\d{1,3}\.){3}\d{1,3}/(\d|[12]\d|3[0-2])'
+    ConstraintDescription: Supply an IPv4 CIDR such as 203.0.113.10/32.
+  AppPort:
+    Type: Number
+    Default: 8000
+    MinValue: 1024
+    MaxValue: 65535
+  SourceRevision:
+    Type: String
+    Description: Full 40-character commit SHA in the public application repository. Commit and push deployment changes first.
+    AllowedPattern: '[a-fA-F0-9]{40}'
+  SourceRepository:
+    Type: String
+    Default: TEE2DWHY/aws-automated-web-deployment
+    Description: Public GitHub repository in owner/name format. Private repositories are not supported by this bootstrap.
+    AllowedPattern: '[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+'
+  UploadPrefix:
+    Type: String
+    Default: uploads
+    Description: S3 object prefix to which the application may upload.
+    AllowedPattern: '[A-Za-z0-9][A-Za-z0-9_-]{0,62}'
+
+Resources:
+  AppVpc:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.42.0.0/16
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-vpc'
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+
+  GatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref AppVpc
+      InternetGatewayId: !Ref InternetGateway
+
+  PublicSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref AppVpc
+      CidrBlock: 10.42.1.0/24
+      MapPublicIpOnLaunch: true
+      AvailabilityZone: !Select [0, !GetAZs '']
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-public'
+
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref AppVpc
+
+  InternetRoute:
+    Type: AWS::EC2::Route
+    DependsOn: GatewayAttachment
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  SubnetRouteAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet
+      RouteTableId: !Ref PublicRouteTable
+
+  CompanyBucket:
+    Type: AWS::S3::Bucket
+    # Empty this bucket before deleting the stack. Versioning is intentionally
+    # omitted so cleanup does not also require deleting historical versions.
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Retain
+    Properties:
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        IgnorePublicAcls: true
+        BlockPublicPolicy: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      Tags:
+        - Key: Project
+          Value: !Ref AWS::StackName
+
+  BucketTlsPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref CompanyBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: '*'
+            Action: s3:*
+            Resource:
+              - !GetAtt CompanyBucket.Arn
+              - !Sub '${CompanyBucket.Arn}/*'
+            Condition:
+              Bool:
+                aws:SecureTransport: 'false'
+
+  AppRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      # Session Manager provides administration without SSH keys or port 22.
+      ManagedPolicyArns:
+        - !Sub 'arn:${AWS::Partition}:iam::aws:policy/AmazonSSMManagedInstanceCore'
+      Policies:
+        - PolicyName: UploadOnlyToApplicationPrefix
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: s3:PutObject
+                Resource: !Sub '${CompanyBucket.Arn}/${UploadPrefix}/*'
+
+  AppInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles:
+        - !Ref AppRole
+
+  AppSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Restricted application access; administration through SSM.
+      VpcId: !Ref AppVpc
+      SecurityGroupIngress:
+        - Description: Application access from trusted clients
+          IpProtocol: tcp
+          FromPort: !Ref AppPort
+          ToPort: !Ref AppPort
+          CidrIp: !Ref AllowedClientCidr
+      SecurityGroupEgress:
+        - Description: HTTPS for package downloads, S3, and SSM
+          IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+        - Description: HTTP for distribution package repositories and redirects
+          IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+
+  AppInstance:
+    Type: AWS::EC2::Instance
+    DependsOn:
+      - InternetRoute
+      - SubnetRouteAssociation
+      - BucketTlsPolicy
+    Properties:
+      ImageId: !Ref LatestAmiId
+      InstanceType: !Ref InstanceType
+      IamInstanceProfile: !Ref AppInstanceProfile
+      SubnetId: !Ref PublicSubnet
+      SecurityGroupIds:
+        - !Ref AppSecurityGroup
+      MetadataOptions:
+        HttpEndpoint: enabled
+        HttpTokens: required
+        HttpPutResponseHopLimit: 1
+      BlockDeviceMappings:
+        - DeviceName: /dev/xvda
+          Ebs:
+            VolumeType: gp3
+            VolumeSize: 12
+            Encrypted: true
+            DeleteOnTermination: true
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-app'
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          # Stop setup if a command fails.
+          set -e
+
+          # 1. Install Node.js and npm. The AWS CLI is used for role checks later.
+          dnf install -y nodejs22 nodejs22-npm awscli2
+
+          # 2. Download the application at the chosen GitHub commit.
+          mkdir -p /opt/webapp
+          curl --fail --location \
+            'https://codeload.github.com/${SourceRepository}/tar.gz/${SourceRevision}' \
+            --output /tmp/app-source.tar.gz
+          tar -xzf /tmp/app-source.tar.gz --strip-components=1 -C /opt/webapp
+          cd /opt/webapp
+
+          # 3. Install runtime dependencies from package-lock.json.
+          /usr/bin/npm-22 ci --omit=dev
+
+          # 4. Save the application's configuration.
+          cat > /etc/webapp.env <<'APPENV'
+          NODE_ENV=production
+          PORT=${AppPort}
+          AWS_REGION=${AWS::Region}
+          S3_BUCKET_NAME=${CompanyBucket}
+          S3_UPLOAD_PREFIX=${UploadPrefix}
+          APPENV
+          chmod 600 /etc/webapp.env
+
+          # 5. Run the app as a service with its own Linux user.
+          useradd --system --shell /sbin/nologin webapp
+          cat > /etc/systemd/system/webapp.service <<'SERVICE'
+          [Unit]
+          Description=TypeScript web application
+          Wants=network-online.target
+          After=network-online.target
+
+          [Service]
+          User=webapp
+          WorkingDirectory=/opt/webapp
+          EnvironmentFile=/etc/webapp.env
+          ExecStart=/usr/bin/npm-22 start
+          Restart=always
+          RestartSec=5
+
+          [Install]
+          WantedBy=multi-user.target
+          SERVICE
+          systemctl daemon-reload
+          systemctl enable --now webapp
+
+Outputs:
+  BucketName:
+    Description: Private bucket created for application uploads.
+    Value: !Ref CompanyBucket
+  UploadObjectArn:
+    Description: Object scope to which the instance role may upload.
+    Value: !Sub '${CompanyBucket.Arn}/${UploadPrefix}/*'
+  InstanceId:
+    Description: EC2 instance ID for Session Manager and inspection.
+    Value: !Ref AppInstance
+  ApplicationUrl:
+    Description: HTTP demo URL; accessible only from AllowedClientCidr.
+    Value: !Sub 'http://${AppInstance.PublicDnsName}:${AppPort}'
+  HealthUrl:
+    Description: Application liveness endpoint; does not verify S3 permissions.
+    Value: !Sub 'http://${AppInstance.PublicDnsName}:${AppPort}/health'
+  InstanceRoleArn:
+    Description: Role used by the application without embedded credentials.
+    Value: !GetAtt AppRole.Arn
+  VpcId:
+    Value: !Ref AppVpc
+  DeployedSourceRevision:
+    Description: Source fetched on first boot. Changing User Data alone does not redeploy running code.
+    Value: !Ref SourceRevision
