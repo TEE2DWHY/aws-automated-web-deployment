@@ -37,3 +37,6 @@ Thumbs.db
 *.swp
 *.swo
 *~
+
+# Temporary files received by Multer
+/uploads/

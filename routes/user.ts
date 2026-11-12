@@ -1,8 +1,8 @@
-import { Router } from "express";
-import { uploadFile } from "../controller/user";
-const router = Router()
+import { Router } from 'express';
+import { uploadFile } from '../controller/user';
+import { upload } from '../middleware/multer';
+const router = Router();
 
-router.put("/upload", uploadFile)
+router.put('/upload', upload.single('upload_file'), uploadFile);
 
-export default router
-
+export default router;

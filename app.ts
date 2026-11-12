@@ -1,22 +1,24 @@
-import "dotenv/config";
+import 'dotenv/config';
 import express from 'express';
-import routes from "./routes/index";
-
-
+import { uploadErrors } from './middleware/uploadErrors';
+import routes from './routes/index';
 const app = express();
-app.use(express.json())
-app.use(routes)
 
-const PORT = process.env.PORT
+app.use(express.static('public'));
+app.use(express.json());
+app.use(routes);
+app.use(uploadErrors);
 
-app.get("/health", (req, res)=>{
-    res.status(200).send("Server is ok.")
-})
+const PORT = process.env.PORT;
 
-app.get("/", (req, res)=>{
-    res.send("<h1>Welcome to the homepage</h1>")
-})
+app.get('/health', (req, res) => {
+	res.status(200).send('Server is ok.');
+});
 
-app.listen(PORT, ()=>{
-    console.log(`Server is running on port: ${PORT}`)
-})
+app.get('/', (req, res) => {
+	res.send('<h1>Welcome to the homepage</h1>');
+});
+
+app.listen(PORT, () => {
+	console.log(`Server is running on port: ${PORT}`);
+});

@@ -10,36 +10,47 @@ Description: >-
 # !GetAtt gets a resource attribute, such as its ARN (AWS resource identifier).
 # !Sub replaces ${...} placeholders inside text.
 Parameters:
+  # Chooses EC2 CPU and memory. Default is preselected; AllowedValues limits the choices.
   InstanceType:
     Type: String
     Default: t3.micro
     AllowedValues: [t3.micro, t3.small, t3.medium]
+  # Looks up the Amazon Linux image ID from an AWS-managed public parameter in this region.
   LatestAmiId:
     Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
     Default: /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64
     Description: Retrieves the Amazon Linux 2023 AMI ID for the deployment region.
+  # Your public IPv4 address with /32 allows only that address to connect to the app.
   AllowedClientCidr:
     Type: String
     Description: Enter your public IPV4 address followd by a /32
+  # The port your app must listen on. The security group opens this same port.
   AppPort:
     Type: Number
     Default: 8000
     MinValue: 1024
     MaxValue: 65535
+  # Public GitHub owner/repository cloned onto EC2 on first boot; it does not start the app.
   SourceRepository:
     Type: String
     Default: TEE2DWHY/aws-automated-web-deployment
     Description: 'This is the github repository for this project. Private repositories are not supported'
+  # Limits the role to object keys under this prefix, such as uploads/photo.jpg.
   UploadPrefix:
     Type: String
     Default: uploads
     Description: S3 object prefix to which the app uploads to
 
+# Delete each resource when the stack is deleted or the resource is removed
+# from the template. Rollback also follows these policies. This does not delete
+# anything now, and S3 must be emptied before its bucket can be deleted.
+# Replacement during an update is controlled separately by UpdateReplacePolicy.
 Resources:
   # NETWORK: EC2 needs a subnet inside a VPC. Creating them here avoids
   # selecting existing networking manually when you deploy.
   AppVpc:
     Type: AWS::EC2::VPC
+    DeletionPolicy: Delete
     Properties:
       # Private network addresses: 10.42.0.0 through 10.42.255.255.
       CidrBlock: 10.42.0.0/16
@@ -55,10 +66,12 @@ Resources:
   # Provides the VPC with a path to the internet when routing is configured.
   InternetGateway:
     Type: AWS::EC2::InternetGateway
+    DeletionPolicy: Delete
 
   # Connects the internet gateway to this VPC. Creating it alone is not enough.
   GatewayAttachment:
     Type: AWS::EC2::VPCGatewayAttachment
+    DeletionPolicy: Delete
     Properties:
       VpcId: !Ref AppVpc
       InternetGatewayId: !Ref InternetGateway
@@ -66,6 +79,7 @@ Resources:
   # EC2 runs in this smaller section of the VPC: 10.42.1.0 through 10.42.1.255.
   PublicSubnet:
     Type: AWS::EC2::Subnet
+    DeletionPolicy: Delete
     Properties:
       VpcId: !Ref AppVpc
       CidrBlock: 10.42.1.0/24
@@ -80,12 +94,14 @@ Resources:
   # Stores the directions that network traffic follows.
   PublicRouteTable:
     Type: AWS::EC2::RouteTable
+    DeletionPolicy: Delete
     Properties:
       VpcId: !Ref AppVpc
 
   # Send internet-bound traffic to the gateway. The VPC also has a local route.
   InternetRoute:
     Type: AWS::EC2::Route
+    DeletionPolicy: Delete
     # Wait for the gateway to be attached before adding the route.
     DependsOn: GatewayAttachment
     Properties:
@@ -96,6 +112,7 @@ Resources:
   # Makes our subnet use that route table. Its internet route makes it public.
   SubnetRouteAssociation:
     Type: AWS::EC2::SubnetRouteTableAssociation
+    DeletionPolicy: Delete
     Properties:
       SubnetId: !Ref PublicSubnet
       RouteTableId: !Ref PublicRouteTable
@@ -131,6 +148,7 @@ Resources:
   # Reject HTTP requests to S3. HTTPS requests still need IAM permission.
   BucketTlsPolicy:
     Type: AWS::S3::BucketPolicy
+    DeletionPolicy: Delete
     Properties:
       Bucket: !Ref CompanyS3Bucket
       PolicyDocument:
@@ -154,6 +172,7 @@ Resources:
   # PERMISSIONS: use a role, not an IAM user with stored access keys.
   AppRole:
     Type: AWS::IAM::Role
+    DeletionPolicy: Delete
     Properties:
       # Trust policy: WHO can use this role? EC2 can assume it.
       AssumeRolePolicyDocument:
@@ -180,6 +199,7 @@ Resources:
   # obtain temporary credentials automatically; no keys go in app.ts or .env.
   AppInstanceProfile:
     Type: AWS::IAM::InstanceProfile
+    DeletionPolicy: Delete
     Properties:
       Roles:
         - !Ref AppRole
@@ -187,6 +207,7 @@ Resources:
   # FIREWALL: controls connections. IAM separately controls AWS operations.
   AppSecurityGroup:
     Type: AWS::EC2::SecurityGroup
+    DeletionPolicy: Delete
     Properties:
       GroupDescription: Restricted application access; administration through SSM.
       VpcId: !Ref AppVpc
@@ -214,6 +235,7 @@ Resources:
   # SERVER: launch EC2 after the internet route and bucket policy are ready.
   EC2Instance:
     Type: AWS::EC2::Instance
+    DeletionPolicy: Delete
     DependsOn:
       - InternetRoute
       - SubnetRouteAssociation
@@ -242,6 +264,22 @@ Resources:
       Tags:
         - Key: Name
           Value: !Sub '${AWS::StackName}-app'
+      # Runs as root on the new instance's first boot, not on every restart.
+      # This downloads the code only; Node.js setup and app startup are still manual.
+      UserData:
+        # Substitute the repository parameter and encode the script for EC2.
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          # Stop if installation or download fails.
+          set -e
+
+          # Install Git so EC2 can download the public repository.
+          dnf install -y git
+
+          # Download the default branch into /opt/webapp, using SourceRepository.
+          # Push local changes first. This does not install dependencies or run the app.
+          git clone 'https://github.com/${SourceRepository}.git' /opt/webapp
+
 # Useful values shown in the CloudFormation console after deployment.
 # After manually installing and starting the app on EC2,
 #check HealthUrl and perform an upload to verify it works.
