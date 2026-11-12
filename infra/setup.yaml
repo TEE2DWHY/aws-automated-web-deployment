@@ -1,108 +1,125 @@
+# This is CloudFormation's format version, not the date this file was written.
 AWSTemplateFormatVersion: '2010-09-09'
+# >- joins these description lines into one sentence.
 Description: >-
-  Single-instance TypeScript application environment with a dedicated public
-  subnet, private S3 storage, an EC2 role, and automatic application startup.
+  A TypeScript application environment with a dedicated public subnet,
+  private S3 storage and an EC2 role. Application installation is manual.
 
+# Inputs supplied when creating the stack. Defaults are prefilled values.
+# !Ref gets a parameter value or a resource identifier.
+# !GetAtt gets a resource attribute, such as its ARN (AWS resource identifier).
+# !Sub replaces ${...} placeholders inside text.
 Parameters:
   InstanceType:
     Type: String
     Default: t3.micro
     AllowedValues: [t3.micro, t3.small, t3.medium]
-    Description: x86 EC2 instance size. AWS charges apply.
   LatestAmiId:
     Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
     Default: /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64
-    Description: Amazon Linux 2023 x86_64 AMI resolved in the stack region.
+    Description: Retrieves the Amazon Linux 2023 AMI ID for the deployment region.
   AllowedClientCidr:
     Type: String
-    Description: Your public IPv4 address with /32, or a trusted IPv4 CIDR, permitted to access the app.
-    AllowedPattern: '(\d{1,3}\.){3}\d{1,3}/(\d|[12]\d|3[0-2])'
-    ConstraintDescription: Supply an IPv4 CIDR such as 203.0.113.10/32.
+    Description: Enter your public IPV4 address followd by a /32
   AppPort:
     Type: Number
     Default: 8000
     MinValue: 1024
     MaxValue: 65535
-  SourceRevision:
-    Type: String
-    Description: Full 40-character commit SHA in the public application repository. Commit and push deployment changes first.
-    AllowedPattern: '[a-fA-F0-9]{40}'
   SourceRepository:
     Type: String
     Default: TEE2DWHY/aws-automated-web-deployment
-    Description: Public GitHub repository in owner/name format. Private repositories are not supported by this bootstrap.
-    AllowedPattern: '[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+'
+    Description: 'This is the github repository for this project. Private repositories are not supported'
   UploadPrefix:
     Type: String
     Default: uploads
-    Description: S3 object prefix to which the application may upload.
-    AllowedPattern: '[A-Za-z0-9][A-Za-z0-9_-]{0,62}'
+    Description: S3 object prefix to which the app uploads to
 
 Resources:
+  # NETWORK: EC2 needs a subnet inside a VPC. Creating them here avoids
+  # selecting existing networking manually when you deploy.
   AppVpc:
     Type: AWS::EC2::VPC
     Properties:
+      # Private network addresses: 10.42.0.0 through 10.42.255.255.
       CidrBlock: 10.42.0.0/16
+      # DNS lets EC2 resolve names such as github.com.
       EnableDnsSupport: true
+      # Allows public DNS hostnames for instances with public IPv4 addresses.
       EnableDnsHostnames: true
+      # Labels make this resource easier to identify in the AWS console.
       Tags:
         - Key: Name
           Value: !Sub '${AWS::StackName}-vpc'
 
+  # Provides the VPC with a path to the internet when routing is configured.
   InternetGateway:
     Type: AWS::EC2::InternetGateway
 
+  # Connects the internet gateway to this VPC. Creating it alone is not enough.
   GatewayAttachment:
     Type: AWS::EC2::VPCGatewayAttachment
     Properties:
       VpcId: !Ref AppVpc
       InternetGatewayId: !Ref InternetGateway
 
+  # EC2 runs in this smaller section of the VPC: 10.42.1.0 through 10.42.1.255.
   PublicSubnet:
     Type: AWS::EC2::Subnet
     Properties:
       VpcId: !Ref AppVpc
       CidrBlock: 10.42.1.0/24
+      # Gives instances a public IPv4 address for this direct-access demo.
       MapPublicIpOnLaunch: true
+      # Get the region's available zones and select the first one (index 0).
       AvailabilityZone: !Select [0, !GetAZs '']
       Tags:
         - Key: Name
           Value: !Sub '${AWS::StackName}-public'
 
+  # Stores the directions that network traffic follows.
   PublicRouteTable:
     Type: AWS::EC2::RouteTable
     Properties:
       VpcId: !Ref AppVpc
 
+  # Send internet-bound traffic to the gateway. The VPC also has a local route.
   InternetRoute:
     Type: AWS::EC2::Route
+    # Wait for the gateway to be attached before adding the route.
     DependsOn: GatewayAttachment
     Properties:
       RouteTableId: !Ref PublicRouteTable
       DestinationCidrBlock: 0.0.0.0/0
       GatewayId: !Ref InternetGateway
 
+  # Makes our subnet use that route table. Its internet route makes it public.
   SubnetRouteAssociation:
     Type: AWS::EC2::SubnetRouteTableAssociation
     Properties:
       SubnetId: !Ref PublicSubnet
       RouteTableId: !Ref PublicRouteTable
 
-  CompanyBucket:
+  # STORAGE: CloudFormation generates a unique bucket name for uploads.
+  CompanyS3Bucket:
     Type: AWS::S3::Bucket
     # Empty this bucket before deleting the stack. Versioning is intentionally
     # omitted so cleanup does not also require deleting historical versions.
     DeletionPolicy: Delete
+    # Keep the old bucket if an update replaces it; clean it up separately.
     UpdateReplacePolicy: Retain
     Properties:
+      # Disable ACLs and let the bucket owner own uploaded objects.
       OwnershipControls:
         Rules:
           - ObjectOwnership: BucketOwnerEnforced
+      # Block public ACLs and public bucket policies; the bucket stays private.
       PublicAccessBlockConfiguration:
         BlockPublicAcls: true
         IgnorePublicAcls: true
         BlockPublicPolicy: true
         RestrictPublicBuckets: true
+      # Encrypt stored files using keys managed by S3 (SSE-S3).
       BucketEncryption:
         ServerSideEncryptionConfiguration:
           - ServerSideEncryptionByDefault:
@@ -111,27 +128,34 @@ Resources:
         - Key: Project
           Value: !Ref AWS::StackName
 
+  # Reject HTTP requests to S3. HTTPS requests still need IAM permission.
   BucketTlsPolicy:
     Type: AWS::S3::BucketPolicy
     Properties:
-      Bucket: !Ref CompanyBucket
+      Bucket: !Ref CompanyS3Bucket
       PolicyDocument:
         Version: '2012-10-17'
         Statement:
-          - Sid: DenyInsecureTransport
+          # Sid is just a readable label. Deny applies only when the condition matches.
+          - Sid: DenyInsecureRequests
             Effect: Deny
+            # Apply this restriction to every requester and S3 action.
             Principal: '*'
             Action: s3:*
+            # Cover both the bucket itself and all object keys inside it.
             Resource:
-              - !GetAtt CompanyBucket.Arn
-              - !Sub '${CompanyBucket.Arn}/*'
+              - !GetAtt CompanyS3Bucket.Arn
+              - !Sub '${CompanyS3Bucket.Arn}/*'
             Condition:
               Bool:
+                # IAM Bool conditions use text values in the policy document.
                 aws:SecureTransport: 'false'
 
+  # PERMISSIONS: use a role, not an IAM user with stored access keys.
   AppRole:
     Type: AWS::IAM::Role
     Properties:
+      # Trust policy: WHO can use this role? EC2 can assume it.
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
@@ -142,6 +166,7 @@ Resources:
       # Session Manager provides administration without SSH keys or port 22.
       ManagedPolicyArns:
         - !Sub 'arn:${AWS::Partition}:iam::aws:policy/AmazonSSMManagedInstanceCore'
+      # Permission policy: WHAT can this role do? Upload only under our prefix.
       Policies:
         - PolicyName: UploadOnlyToApplicationPrefix
           PolicyDocument:
@@ -149,25 +174,31 @@ Resources:
             Statement:
               - Effect: Allow
                 Action: s3:PutObject
-                Resource: !Sub '${CompanyBucket.Arn}/${UploadPrefix}/*'
+                Resource: !Sub '${CompanyS3Bucket.Arn}/${UploadPrefix}/*'
 
+  # EC2 receives its role through this instance profile. The SDK can then
+  # obtain temporary credentials automatically; no keys go in app.ts or .env.
   AppInstanceProfile:
     Type: AWS::IAM::InstanceProfile
     Properties:
       Roles:
         - !Ref AppRole
 
+  # FIREWALL: controls connections. IAM separately controls AWS operations.
   AppSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
       GroupDescription: Restricted application access; administration through SSM.
       VpcId: !Ref AppVpc
+      # Inbound: allow only the application port from your supplied address.
       SecurityGroupIngress:
         - Description: Application access from trusted clients
           IpProtocol: tcp
           FromPort: !Ref AppPort
           ToPort: !Ref AppPort
           CidrIp: !Ref AllowedClientCidr
+      # Outbound: allow web downloads and AWS API calls. Responses to allowed
+      # connections are automatically permitted because security groups are stateful.
       SecurityGroupEgress:
         - Description: HTTPS for package downloads, S3, and SSM
           IpProtocol: tcp
@@ -180,7 +211,8 @@ Resources:
           ToPort: 80
           CidrIp: 0.0.0.0/0
 
-  AppInstance:
+  # SERVER: launch EC2 after the internet route and bucket policy are ready.
+  EC2Instance:
     Type: AWS::EC2::Instance
     DependsOn:
       - InternetRoute
@@ -190,13 +222,16 @@ Resources:
       ImageId: !Ref LatestAmiId
       InstanceType: !Ref InstanceType
       IamInstanceProfile: !Ref AppInstanceProfile
+      # Place EC2 in our public subnet and attach its firewall.
       SubnetId: !Ref PublicSubnet
       SecurityGroupIds:
         - !Ref AppSecurityGroup
+      # Require IMDSv2 tokens when accessing instance metadata, including role credentials.
       MetadataOptions:
         HttpEndpoint: enabled
         HttpTokens: required
         HttpPutResponseHopLimit: 1
+      # Use an encrypted 12 GiB root disk; delete it when EC2 is terminated.
       BlockDeviceMappings:
         - DeviceName: /dev/xvda
           Ebs:
@@ -207,79 +242,27 @@ Resources:
       Tags:
         - Key: Name
           Value: !Sub '${AWS::StackName}-app'
-      UserData:
-        Fn::Base64: !Sub |
-          #!/bin/bash
-          # Stop setup if a command fails.
-          set -e
-
-          # 1. Install Node.js and npm. The AWS CLI is used for role checks later.
-          dnf install -y nodejs22 nodejs22-npm awscli2
-
-          # 2. Download the application at the chosen GitHub commit.
-          mkdir -p /opt/webapp
-          curl --fail --location \
-            'https://codeload.github.com/${SourceRepository}/tar.gz/${SourceRevision}' \
-            --output /tmp/app-source.tar.gz
-          tar -xzf /tmp/app-source.tar.gz --strip-components=1 -C /opt/webapp
-          cd /opt/webapp
-
-          # 3. Install runtime dependencies from package-lock.json.
-          /usr/bin/npm-22 ci --omit=dev
-
-          # 4. Save the application's configuration.
-          cat > /etc/webapp.env <<'APPENV'
-          NODE_ENV=production
-          PORT=${AppPort}
-          AWS_REGION=${AWS::Region}
-          S3_BUCKET_NAME=${CompanyBucket}
-          S3_UPLOAD_PREFIX=${UploadPrefix}
-          APPENV
-          chmod 600 /etc/webapp.env
-
-          # 5. Run the app as a service with its own Linux user.
-          useradd --system --shell /sbin/nologin webapp
-          cat > /etc/systemd/system/webapp.service <<'SERVICE'
-          [Unit]
-          Description=TypeScript web application
-          Wants=network-online.target
-          After=network-online.target
-
-          [Service]
-          User=webapp
-          WorkingDirectory=/opt/webapp
-          EnvironmentFile=/etc/webapp.env
-          ExecStart=/usr/bin/npm-22 start
-          Restart=always
-          RestartSec=5
-
-          [Install]
-          WantedBy=multi-user.target
-          SERVICE
-          systemctl daemon-reload
-          systemctl enable --now webapp
-
+# Useful values shown in the CloudFormation console after deployment.
+# After manually installing and starting the app on EC2,
+#check HealthUrl and perform an upload to verify it works.
 Outputs:
   BucketName:
     Description: Private bucket created for application uploads.
-    Value: !Ref CompanyBucket
+    Value: !Ref CompanyS3Bucket
   UploadObjectArn:
     Description: Object scope to which the instance role may upload.
-    Value: !Sub '${CompanyBucket.Arn}/${UploadPrefix}/*'
+    Value: !Sub '${CompanyS3Bucket.Arn}/${UploadPrefix}/*'
   InstanceId:
     Description: EC2 instance ID for Session Manager and inspection.
-    Value: !Ref AppInstance
+    Value: !Ref EC2Instance
   ApplicationUrl:
-    Description: HTTP demo URL; accessible only from AllowedClientCidr.
-    Value: !Sub 'http://${AppInstance.PublicDnsName}:${AppPort}'
+    Description: Application URL after manual setup; restricted to AllowedClientCidr.
+    Value: !Sub 'http://${EC2Instance.PublicIp}:${AppPort}'
   HealthUrl:
-    Description: Application liveness endpoint; does not verify S3 permissions.
-    Value: !Sub 'http://${AppInstance.PublicDnsName}:${AppPort}/health'
+    Description: Health URL after manual setup; not active until the app is started.
+    Value: !Sub 'http://${EC2Instance.PublicIp}:${AppPort}/health'
   InstanceRoleArn:
     Description: Role used by the application without embedded credentials.
     Value: !GetAtt AppRole.Arn
   VpcId:
     Value: !Ref AppVpc
-  DeployedSourceRevision:
-    Description: Source fetched on first boot. Changing User Data alone does not redeploy running code.
-    Value: !Ref SourceRevision

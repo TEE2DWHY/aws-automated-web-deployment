@@ -9,7 +9,7 @@ The project addresses a common infrastructure problem: deploying an application 
 ## Project objectives
 
 - Provision the application environment through CloudFormation.
-- Run a Node.js application on EC2, with dependencies and startup configured through User Data.
+- Restore automated application installation and startup through User Data after practising the steps manually.
 - Store application files in a private S3 bucket.
 - Authenticate from EC2 through an IAM role and instance profile, using temporary credentials.
 - Demonstrate deployment, a controlled infrastructure update, and cleanup through a documented workflow.
@@ -23,7 +23,7 @@ The project addresses a common infrastructure problem: deploying an application 
 | Health endpoint | `GET /health` returns a basic server response | Implemented; no automated check recorded |
 | Upload endpoint | `PUT /api/v1/upload` reads a local sample image and sends an S3 `PutObjectCommand` | Request reached the SDK; blocked by missing local credentials |
 | AWS authentication | No credentials supplied in application code; SDK uses its default credential providers | Successful authentication pending |
-| Infrastructure | Dedicated network, EC2 startup, S3, and IAM in `infra/setup.yaml` | Local schema validation passed; AWS deployment pending |
+| Infrastructure | Dedicated network, EC2, S3, and IAM in `infra/setup.yaml` | Local schema validation passed; AWS deployment pending |
 
 ## Architecture
 
@@ -39,7 +39,7 @@ flowchart LR
     CF -. Provisions .-> App
     CF -. Provisions .-> S3
     CF -. Provisions .-> Profile
-    Bootstrap[EC2 User Data] -. Installs dependencies and starts application .-> App
+    Manual[Manual application installation] -. Configures .-> App
 ```
 
 The current local request flow is:
@@ -172,11 +172,11 @@ The observed `CredentialsProviderError: Could not load credentials from any prov
 
 ## Infrastructure deployment
 
-The template defines a dedicated VPC and public subnet, restricted application security group, encrypted private S3 bucket, upload-only EC2 role, instance profile, and Amazon Linux 2023 EC2 instance. User Data installs the application from a pinned public GitHub commit and starts it under systemd. After deployment, check `/health` yourself: stack completion does not verify that the application started successfully.
+The template creates a dedicated VPC, public subnet, internet gateway and routing, restricted application security group, encrypted private S3 bucket, upload-only EC2 role, instance profile, and Amazon Linux 2023 EC2 instance. User Data has been removed for this learning stage. Install Node.js, download the application, install dependencies, configure the environment, and start the app manually through Session Manager. Stack completion provisions infrastructure; it does not install or start the application.
 
-See the [deployment guide](infra/README.md) for prerequisites, one-command provisioning, role verification, infrastructure updates, troubleshooting, and object/stack cleanup. Commit and push the deployment changes before using their source revision.
+See the [deployment guide](infra/README.md) for prerequisites, one-command provisioning, role verification, infrastructure updates, troubleshooting, and object/stack cleanup. Application installation is a separate manual step after infrastructure provisioning.
 
-The environment is a single-instance HTTP demonstration. Application releases currently use a new stack; changing User Data alone does not redeploy code on an existing instance.
+The environment is a single-instance HTTP demonstration. Application installation and releases are manual; automated startup remains a future milestone.
 
 ## Validation and evidence roadmap
 
@@ -201,7 +201,7 @@ The environment is a single-instance HTTP demonstration. Application releases cu
 - The upload endpoint has no application-level authentication or file validation yet.
 - Error responses currently include raw error text; response sanitization is planned before public deployment.
 - There is no automated test suite; `npm test` is still the generated placeholder and exits with an error.
-- systemd startup is defined in User Data but has not been verified on EC2. HTTPS, high availability, and automated application releases remain future work.
+- Application installation, startup, and releases are manual. Automated startup, HTTPS, and high availability remain future work.
 
 ## Portfolio evidence to add
 
