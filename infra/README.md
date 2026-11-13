@@ -28,25 +28,84 @@ On first boot, User Data installs Git and downloads the public repository into `
 
 The stack creates its own network; you do not need to select a VPC or subnet. Running these AWS resources may incur charges.
 
-## 2. Set up the application
+## 2. Set up the application on EC2
 
-1. Find the instance in EC2 and connect through **Session Manager**. Your AWS identity needs permission to start a session.
-2. Check that the repository exists at `/opt/webapp`. User Data may still be downloading it when stack creation finishes.
-3. Install Node.js 22 and npm, then install the application's dependencies with `npm-22 ci --omit=dev` from `/opt/webapp`.
-4. Configure the application environment:
+Run these commands in the **EC2 Session Manager terminal**, not on your laptop.
 
-   ```dotenv
-   PORT=8000
-   AWS_REGION=eu-west-2
-   S3_BUCKET_NAME=your-stack-bucket-name
-   S3_UPLOAD_PREFIX=uploads
-   ```
+### Connect and update the code
 
-   Use your actual stack region, port, prefix, and the `BucketName` from **Outputs**. The app supports a `.env` file in its working directory. Do not add AWS access keys; EC2 uses its role.
+In EC2, select your instance → **Connect → Session Manager → Connect**. Then:
 
-5. Start the app with `npm-22 start` from `/opt/webapp`.
+```bash
+cd /opt/webapp
+ls package.json
+sudo git pull --ff-only
+```
 
-The app runs in the foreground for now. A systemd service is needed later to keep it running after disconnecting and to start it after a reboot.
+User Data downloads the repository on first boot. `git pull --ff-only` gets changes pushed since then and stops if the histories have diverged. If `/opt/webapp` is missing, check `/var/log/cloud-init-output.log`; the first-boot download may still be running or may have failed.
+
+### Install Node.js and dependencies
+
+```bash
+sudo dnf install -y nodejs22 nodejs22-npm
+node-22 --version
+npm-22 --version
+
+cd /opt/webapp
+sudo npm-22 ci --omit=dev
+```
+
+`sudo` is needed for installation because the application directory was created by root. Start the app as your regular session user later.
+
+### Create the environment file
+
+```bash
+sudo nano /opt/webapp/.env
+```
+
+Enter these values, replacing the region and bucket name with your actual stack details:
+
+```dotenv
+PORT=8000
+AWS_REGION=YOUR_BUCKET_REGION
+S3_BUCKET_NAME=YOUR_STACK_BUCKET_NAME
+S3_UPLOAD_PREFIX=uploads
+```
+
+Use the stack's `AppPort` and `UploadPrefix` if you changed their defaults. Find `BucketName` in CloudFormation **Outputs**. The region must match the bucket's region.
+
+Save with **Ctrl+O**, press **Enter**, then exit with **Ctrl+X**. No AWS access keys or `local-dev` profile are needed on EC2; the SDK uses the attached role.
+
+### Give the app permission to save temporary uploads
+
+```bash
+sudo mkdir -p /opt/webapp/uploads
+sudo chown "$(id -un):$(id -gn)" /opt/webapp/uploads
+sudo chmod 700 /opt/webapp/uploads
+
+cd /opt/webapp
+touch uploads/write-test
+rm uploads/write-test
+```
+
+`chown` gives your current user ownership of the upload directory. `chmod 700` allows only that owner to access it. The write test checks that Multer can create and remove temporary files. Use this same user to run the app.
+
+### Start the app
+
+```bash
+cd /opt/webapp
+npm-22 start
+```
+
+Expect `Server is running on port: 8000`. Leave this terminal running while testing. Restart the app after changing `.env` or updating the code. A systemd service is still needed to keep it running after disconnecting and to start it after a reboot.
+
+### Common EC2 errors
+
+- **`npm-22: command not found`:** install `nodejs22` and `nodejs22-npm` first.
+- **Missing `/usr/bin/package.json`:** run `cd /opt/webapp` before npm commands.
+- **Port is `undefined`:** confirm `/opt/webapp/.env` exists and contains `PORT=8000`.
+- **`EACCES` for `uploads/`:** repeat the directory ownership and write-test commands above as the user running the app.
+- **S3 `PermanentRedirect`:** correct the bucket region in `.env` and restart.
 
 ## 3. Check it works
 

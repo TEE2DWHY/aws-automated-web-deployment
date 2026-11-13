@@ -22,7 +22,7 @@ Built with TypeScript, Node.js, Express, Multer, Axios, and AWS CloudFormation.
 
 ## Current progress
 
-The application and infrastructure template are implemented. An upload from the local application to S3 has been verified successfully. Application uploads from EC2 using its IAM role still need to be verified.
+Uploads from both the local application and the application running on EC2 have succeeded. Separate checks of the EC2 assumed-role identity and denied operations remain to be documented.
 
 CloudFormation creates the network, EC2, S3, and IAM resources. User Data installs Git and downloads the repository. **Installing Node.js, configuring the application, and starting it are still manual.** Full application startup automation is a later step.
 
@@ -104,7 +104,7 @@ Restart the server after changing `.env`. Local authentication is separate from 
 
 ## Deploy to AWS
 
-Follow the [infrastructure guide](infra/README.md) to create the stack and set up the application on EC2.
+Follow the [infrastructure guide](infra/README.md) to create the stack. The [EC2 setup steps](infra/README.md#2-set-up-the-application-on-ec2) cover Session Manager, pulling code, installing Node.js, creating `.env`, fixing upload-directory permissions, and starting the app.
 
 ## Tests
 
@@ -116,7 +116,7 @@ Vitest runs the upload and browser logic tests. Use `npm run test:watch` during 
 
 ## Next steps
 
-- Verify browser uploads on EC2 and confirm the objects in S3.
+- Record evidence of the successful EC2 upload and confirm the uploaded objects in S3.
 - Demonstrate permitted and denied operations using the EC2 role.
 - Configure systemd, then automate application installation and startup.
 - Demonstrate a CloudFormation update and successful stack cleanup.
