@@ -4,9 +4,10 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "test": "node --import tsx --test tests/*.test.ts",
+    "test": "vitest run",
     "dev": "tsx watch app.ts",
-    "start": "tsx app.ts"
+    "start": "tsx app.ts",
+    "test:watch": "vitest"
   },
   "keywords": [],
   "author": "",
@@ -21,6 +22,7 @@
   },
   "devDependencies": {
     "@types/express": "^5.0.6",
-    "@types/multer": "^2.3.0"
+    "@types/multer": "^2.3.0",
+    "vitest": "^5.1.0"
   }
 }

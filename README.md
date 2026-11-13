@@ -2,6 +2,10 @@
 
 A learning project that uses CloudFormation to create AWS infrastructure for a TypeScript file-upload application. The goal is to make the environment repeatable and give EC2 access to S3 without storing AWS credentials in the code.
 
+##` Architecture Diagram
+
+![CloudFormation Setup](./cloud-formation.png)
+
 ## How it works
 
 ```text
@@ -50,11 +54,11 @@ Open **http://localhost:8000**, choose a file, and click **Upload file**. Confir
 
 ## Endpoints
 
-| Method | Path | Purpose |
-| --- | --- | --- |
-| GET | `/` | Upload page |
-| GET | `/health` | Check that the server responds |
-| PUT | `/api/v1/upload` | Upload a file using the `upload_file` multipart field |
+| Method | Path             | Purpose                                               |
+| ------ | ---------------- | ----------------------------------------------------- |
+| GET    | `/`              | Upload page                                           |
+| GET    | `/health`        | Check that the server responds                        |
+| PUT    | `/api/v1/upload` | Upload a file using the `upload_file` multipart field |
 
 ## Deploy to AWS
 
@@ -66,7 +70,7 @@ Follow the [infrastructure guide](infra/README.md) to create the stack and set u
 npm test
 ```
 
-The tests cover upload handling and browser upload logic using mocked S3 calls. They do not verify real AWS permissions or deployment.
+Vitest runs the upload and browser logic tests. Use `npm run test:watch` during development. Tests use mocked S3 calls. They do not verify real AWS permissions or deployment.
 
 ## Next steps
 

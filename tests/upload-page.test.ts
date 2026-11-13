@@ -1,25 +1,45 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
-import { test } from 'node:test';
+import { test } from 'vitest';
 import vm from 'node:vm';
 
-const source = await readFile(new URL('../public/js/upload.js', import.meta.url), 'utf8');
+const source = await readFile(
+	new URL('../public/js/upload.js', import.meta.url),
+	'utf8',
+);
 
 function page(put: (...args: any[]) => Promise<any>) {
 	const elements: Record<string, any> = {};
-	for (const id of ['fileInput', 'selectedFile', 'fileName', 'fileSize', 'removeFileBtn', 'uploadBtn', 'uploadStatus']) {
+	for (const id of [
+		'fileInput',
+		'selectedFile',
+		'fileName',
+		'fileSize',
+		'removeFileBtn',
+		'uploadBtn',
+		'uploadStatus',
+	]) {
 		elements[id] = {
-			files: [], disabled: false, hidden: true, textContent: '',
-			listeners: {}, addEventListener(event: string, fn: Function) { this.listeners[event] = fn; },
+			files: [],
+			disabled: false,
+			hidden: true,
+			textContent: '',
+			listeners: {},
+			addEventListener(event: string, fn: Function) {
+				this.listeners[event] = fn;
+			},
 			focus() {},
 		};
 	}
 	Object.defineProperty(elements.fileInput, 'value', {
-		set(value) { if (value === '') elements.fileInput.files = []; },
+		set(value) {
+			if (value === '') elements.fileInput.files = [];
+		},
 	});
 	vm.runInNewContext(source, {
 		document: { getElementById: (id: string) => elements[id] },
-		axios: { put }, FormData,
+		axios: { put },
+		FormData,
 	});
 	return elements;
 }
@@ -31,7 +51,9 @@ test('selected file is sent through Axios under upload_file and controls lock du
 	const elements = page(async (url, data) => {
 		assert.equal(url, '/api/v1/upload');
 		assert.equal(await data.get('upload_file').text(), 'selected file');
-		return new Promise((resolve) => { finish = resolve; });
+		return new Promise((resolve) => {
+			finish = resolve;
+		});
 	});
 	elements.fileInput.files = [file];
 	elements.fileInput.listeners.change();
@@ -50,7 +72,9 @@ test('selected file is sent through Axios under upload_file and controls lock du
 });
 
 test('API error is displayed and file remains selected for retry', async () => {
-	const elements = page(async () => { throw { response: { data: { message: 'Upload rejected' } } }; });
+	const elements = page(async () => {
+		throw { response: { data: { message: 'Upload rejected' } } };
+	});
 	elements.fileInput.files = [new Blob(['file'])];
 	await elements.uploadBtn.listeners.click();
 	assert.equal(elements.uploadStatus.textContent, 'Upload rejected');
@@ -60,7 +84,9 @@ test('API error is displayed and file remains selected for retry', async () => {
 
 test('oversized selection disables upload before making an API call', async () => {
 	let calls = 0;
-	const elements = page(async () => { calls++; });
+	const elements = page(async () => {
+		calls++;
+	});
 	elements.fileInput.files = [{ name: 'large.bin', size: 5 * 1024 * 1024 + 1 }];
 	elements.fileInput.listeners.change();
 	await elements.uploadBtn.listeners.click();

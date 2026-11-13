@@ -1,10 +1,10 @@
+import { S3Client } from '@aws-sdk/client-s3';
+import express from 'express';
 import assert from 'node:assert/strict';
-import { after, test } from 'node:test';
 import { mkdtemp, readdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import express from 'express';
-import { S3Client } from '@aws-sdk/client-s3';
+import { afterAll, test } from 'vitest';
 
 // Isolate temporary uploads and replace S3's network call, not multipart parsing.
 const previousDirectory = process.cwd();
@@ -37,7 +37,7 @@ const address = server.address();
 assert.ok(address && typeof address !== 'string');
 const url = `http://127.0.0.1:${address.port}/api/v1/upload`;
 
-after(async () => {
+afterAll(async () => {
 	server.closeAllConnections();
 	await new Promise<void>((resolve) => server.close(() => resolve()));
 	S3Client.prototype.send = originalSend;
@@ -78,7 +78,7 @@ test('multipart uploads reach S3 with matching bytes and unique keys, then are r
 		const response = await fetch(url, { method: 'PUT', body: fileForm() });
 		assert.equal(response.status, 200);
 		const body = await response.json();
-		assert.match(body.key, /^uploads\/[a-f0-9-]{36}$/);
+		assert.match(body.key, /^uploads\/[a-f0-9]{32}$/);
 		keys.push(body.key);
 		assert.equal(commands.at(-1).Bucket, 'test-bucket');
 		assert.equal(commands.at(-1).Body.toString(), 'AAAAAAAAAAAA');
@@ -92,7 +92,9 @@ test('S3 failure returns a safe error and removes the temporary file', async () 
 	try {
 		const response = await fetch(url, { method: 'PUT', body: fileForm() });
 		assert.equal(response.status, 500);
-		assert.deepEqual(await response.json(), { message: 'Upload failed. Please try again.' });
+		assert.deepEqual(await response.json(), {
+			message: 'Upload failed. Please try again.',
+		});
 		await assertNoTemporaryFiles();
 	} finally {
 		failS3 = false;
@@ -101,7 +103,10 @@ test('S3 failure returns a safe error and removes the temporary file', async () 
 
 test('oversized file returns 413 without contacting S3 or retaining a file', async () => {
 	const before = commands.length;
-	const response = await fetch(url, { method: 'PUT', body: fileForm('upload_file', 5 * 1024 * 1024 + 1) });
+	const response = await fetch(url, {
+		method: 'PUT',
+		body: fileForm('upload_file', 5 * 1024 * 1024 + 1),
+	});
 	assert.equal(response.status, 413);
 	assert.match((await response.json()).message, /5 MiB/);
 	assert.equal(commands.length, before);
@@ -110,7 +115,10 @@ test('oversized file returns 413 without contacting S3 or retaining a file', asy
 
 test('unexpected file field returns a JSON 400 response', async () => {
 	const before = commands.length;
-	const response = await fetch(url, { method: 'PUT', body: fileForm('wrong_field') });
+	const response = await fetch(url, {
+		method: 'PUT',
+		body: fileForm('wrong_field'),
+	});
 	assert.equal(response.status, 400);
 	assert.match((await response.json()).message, /upload_file/);
 	assert.equal(commands.length, before);
